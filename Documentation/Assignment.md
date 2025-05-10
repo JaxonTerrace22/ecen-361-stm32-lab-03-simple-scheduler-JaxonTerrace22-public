@@ -71,6 +71,7 @@ Saving and closing this view will re-generate your **main.c**. You can then modi
    The variables are global, since in the C language, you can tell the difference because global variables are declared outside of the main body and local variables are stored inside of it because local variables are only meant to run inside of the program, whereas global variables are meant to be kept for multiple programs without being erased after program is terminated.
 
 7. For the interrupts on Button_1/2, why were the GPIO modes set to be Falling edge trigger?
+   A falling edge trigger means that the switch becomes active low when the button is pushed(connecting it to ground). In this case, the button press signals an interrupt, which is what we want to happen in the case of a scheduler, rather than an interrupt occuring when we let go of the button, which just wouldn't make much sense. When I press the button I want my input registered as an interrupt.
 
 ## Extra Credit (5 pts maximum)
 
@@ -83,3 +84,34 @@ Saving and closing this view will re-generate your **main.c**. You can then modi
 3. Suspend one of the processes after it’s run a pre-set number of times
 
 4. Put out a message when either/both of the buttons are pressed and the processes suspended.  If both are suspended, quit putting out TTY messages.
+
+   if (GPIO_Pin == GPIO_PIN_14) {  
+    task_control[D1_TASK].period += 300;  // raise period by 300ms
+    if (task_control[D1_TASK].period > 3000)  // upper bound
+        task_control[D1_TASK].period = 500;   // reset to minimum
+}
+
+Heres the UART config:
+char rx_buffer[20];
+HAL_UART_Receive_IT(&huart2, (uint8_t*)rx_buffer, 10);
+
+Here:s the callback function:
+if (GPIO_Pin == B1_Pin) {  // button 1
+    task_control[D1_TASK].suspended = !task_control[D1_TASK].suspended;
+    char msg[50];
+    sprintf(msg, "D1 %s\r\n", task_control[D1_TASK].suspended ? "suspended" : "resumed");
+    HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 1000);
+} else if (GPIO_Pin == GPIO_PIN_0) {  // Button_2
+    task_control[D4_TASK].suspended = !task_control[D4_TASK].suspended;
+    char msg[50];
+    sprintf(msg, "D4 %s\r\n", task_control[D4_TASK].suspended ? "suspended" : "resumed");
+    HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 1000);
+}
+// Check if both are suspended
+if (task_control[D1_TASK].suspended && task_control[D4_TASK].suspended) {
+    both_suspended = 1;
+} else {
+    both_suspended = 0;
+}
+
+PuTTY then shows "D1/D4 suspended" or it shows "D1/D4 resumed" when the button gets pressed and when both are suspended it stops outputting
