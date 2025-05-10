@@ -62,12 +62,13 @@ Saving and closing this view will re-generate your **main.c**. You can then modi
 ## Questions
 
 1. List a shortfall that makes this method not a true ‘scheduler’? [*answer here*]
+   So as stated earlier in the lab, this is not a true scheduler as it doesn't interrupt a task to run a higher priority one, also known as a pre-emptive task. It also doesnt do context switching, which means returning to the old task after the higher priority task is done. It's a non-preemptive scheduler, which means it lets the first task complete before going on to the next task, as seen with the LED's. Each LED gets the full alloted time to blink, without one overriding the other.
 
-2. Was there any priority built into this system?
+3. Was there any priority built into this system?
 
-3. Are the variables in the processes (D1_task and D4_task) local or global?   How do you tell and why would either be used or must be used?
+4. Are the variables in the processes (D1_task and D4_task) local or global?   How do you tell and why would either be used or must be used?
 
-4. For the interrupts on Button_1/2, why were the GPIO modes set to be Falling edge trigger?
+5. For the interrupts on Button_1/2, why were the GPIO modes set to be Falling edge trigger?
 
 ## Extra Credit (5 pts maximum)
 
