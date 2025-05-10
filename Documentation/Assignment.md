@@ -65,10 +65,12 @@ Saving and closing this view will re-generate your **main.c**. You can then modi
    So as stated earlier in the lab, this is not a true scheduler as it doesn't interrupt a task to run a higher priority one, also known as a pre-emptive task. It also doesnt do context switching, which means returning to the old task after the higher priority task is done. It's a non-preemptive scheduler, which means it lets the first task complete before going on to the next task, as seen with the LED's. Each LED gets the full alloted time to blink, without one overriding the other.
 
 3. Was there any priority built into this system?
+   No. as stated in the previous problem, there is no priorities carried by the system, it runs in the order that the task_control array was written. It runs on implicit priority where the ones that come first in the queue are executed first and get their full time to shine without interruption.
 
-4. Are the variables in the processes (D1_task and D4_task) local or global?   How do you tell and why would either be used or must be used?
+5. Are the variables in the processes (D1_task and D4_task) local or global?   How do you tell and why would either be used or must be used?
+   The variables are global, since in the C language, you can tell the difference because global variables are declared outside of the main body and local variables are stored inside of it because local variables are only meant to run inside of the program, whereas global variables are meant to be kept for multiple programs without being erased after program is terminated.
 
-5. For the interrupts on Button_1/2, why were the GPIO modes set to be Falling edge trigger?
+7. For the interrupts on Button_1/2, why were the GPIO modes set to be Falling edge trigger?
 
 ## Extra Credit (5 pts maximum)
 
