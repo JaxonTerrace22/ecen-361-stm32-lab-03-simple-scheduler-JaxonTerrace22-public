@@ -73,6 +73,69 @@ Saving and closing this view will re-generate your **main.c**. You can then modi
 7. For the interrupts on Button_1/2, why were the GPIO modes set to be Falling edge trigger?
    A falling edge trigger means that the switch becomes active low when the button is pushed(connecting it to ground). In this case, the button press signals an interrupt, which is what we want to happen in the case of a scheduler, rather than an interrupt occuring when we let go of the button, which just wouldn't make much sense. When I press the button I want my input registered as an interrupt.
 
+void D1_Task(void) {
+    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin); // Toggle D1 (LD2)
+}
+
+void D4_Task(void) {
+    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_3); // Toggle D4 (PB3)
+}
+
+void UART_Task(void) {
+    char msg[50];
+    sprintf(msg, "uwTick: %lu\r\n", uwTick);
+    HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 1000);
+}
+
+void Idle_Task(void) {
+    // Simulate 7-segment display with counters
+    left_display = (left_display + 1) % 10;  // 0-9
+    right_display = (right_display + 1) % 6; // 0-5
+    char msg[50];
+    sprintf(msg, "Idle - Display: %d%d, uwTick: %lu\r\n", left_display, right_display, uwTick);
+    HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 1000);
+}
+
+void Scheduler_Dispatch(void)
+{
+    task_cb task = NULL;
+    int task_found = 0;
+
+    for (int i = 0; i < TASK_COUNT - 1; i++) { // Skip idle task
+        uint32_t elapsed = uwTick - task_control[i].last_run;
+        if (elapsed >= task_control[i].period && task_control[i].suspended == 0) {
+            task = task_control[i].task_func;
+            task_control[i].last_run = uwTick; // Update last run time
+            task_found = 1;
+            break;
+        }
+    }
+
+    if (!task_found) {
+        // Run idle task if no other tasks are ready
+        uint32_t elapsed = uwTick - task_control[IDLE_TASK].last_run;
+        if (elapsed >= task_control[IDLE_TASK].period) {
+            task = task_control[IDLE_TASK].task_func;
+            task_control[IDLE_TASK].last_run = uwTick;
+        }
+    }
+
+    if (task != NULL) {
+        task(); // Execute the task
+    }
+}
+
+/* Handle button interrupts (S1 and S2) */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == B1_Pin) { // S1 (PC13)
+        task_control[D1_TASK].suspended = !task_control[D1_TASK].suspended; // Toggle suspend state
+    }
+    else if (GPIO_Pin == GPIO_PIN_0) { // S2 (PA0)
+        task_control[D4_TASK].suspended = !task_control[D4_TASK].suspended; // Toggle suspend state
+    }
+}
+/* USER CODE END 4 */
+
 ## Extra Credit (5 pts maximum)
 
 
