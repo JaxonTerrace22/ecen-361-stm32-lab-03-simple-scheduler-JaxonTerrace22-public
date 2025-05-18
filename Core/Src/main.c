@@ -6,24 +6,12 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2023 STMicroelectronics.
+  * Copyright (c) 2025 STMicroelectronics.
   * All rights reserved.
   *
   * This software is licensed under terms that can be found in the LICENSE file
   * in the root directory of this software component.
   * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  * @copyright	BYU-Idaho
-  * @date		2023
-  * @version	F23
-  * @note		For course ECEN-361
-  * @author		Lynn Watson
-  ******************************************************************************
-  *
-  * Student should only modify code between
-  ************** STUDENT EDITABLE HERE STARTS HERE *****
-  ************** STUDENT EDITABLE HERE ENDS HERE *******
   *
   ******************************************************************************
   */
@@ -33,20 +21,30 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "MultiFunctionShield.h"
-#include "ecen-361-lab03-support.h"
 #include <stdio.h>
-
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef void (*task_cb)(void); // Function pointer for tasks
 
+typedef struct {
+    uint32_t period;       // Time between runs (in ticks)
+    uint8_t suspended;     // 0 = not suspended, 1 = suspended
+    task_cb task_func;     // Pointer to the task function
+    uint32_t last_run;     // Last time this task ran
+    uint32_t run_count;    // Number of times task has run
+} task_control_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define TASK_COUNT 4 // D1, D4, UART, Idle
+#define D1_TASK 0
+#define D4_TASK 1
+#define UART_TASK 2
+#define IDLE_TASK 3
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -55,54 +53,30 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim17;
-
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+task_control_t task_control[TASK_COUNT]; // Task queue array
+uint8_t left_display = 0;      // 7-segment left counter (0-9)
+uint8_t right_display = 0;     // 7-segment right counter (0-5)
+volatile uint8_t both_suspended = 0; // Flag for both tasks suspended
+char rx_buffer[20]; // UART receive buffer
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_TIM17_Init(void);
-static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
-/* Private function prototypes -----------------------------------------------*/
-#define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
-void MultiFunctionShield_WriteNumberToSegment(uint8_t digit);
-void MultiFunctionShield_Display (int16_t value);
-void MultiFunctionShield__ISRFunc(void);
-void MultiFunctionShield_Clear(void);
-
+void D1_Task(void);
+void D4_Task(void);
+void UART_Task(void);
+void Idle_Task(void);
+void Scheduler_Dispatch(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-/******************************** STUDENT EDITABLE HERE STARTS HERE ***********************/
-  void Scheduler_Dispatch()
-      {
-      /* uWTick is updated each SysTick*/
-      uint32_t runTime = uwTick - last_runtime;     /* Save how long this slice has been going */
-      last_runtime = uwTick;
-      task_cb task = NULL;
-      /*
-       * YOUR CODE GOES HERE
-       * Note that you should also look at the 'suspended' piece of information
-       * in the task_control block to see if the scheduler needs to skip the task for now
-       */
-  /******************************** STUDENT EDITABLE ENDS HERE ***********************/
-
-         task();	// The task is called!
-         return;
-         }
-
-
-
 
 /* USER CODE END 0 */
 
@@ -122,8 +96,6 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  // HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, 0);
-
 
   /* USER CODE END Init */
 
@@ -137,45 +109,42 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
-  MX_TIM17_Init();
-  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start_IT(&htim17);  // LED SevenSeg cycle thru them
-  // Clear the Seven-Segments
-  MultiFunctionShield_Clear();
+  // Initialize task queue
+  task_control[D1_TASK].period = 700;     // D1 every 700ms
+  task_control[D1_TASK].suspended = 0;
+  task_control[D1_TASK].task_func = D1_Task;
+  task_control[D1_TASK].last_run = 0;
+  task_control[D1_TASK].run_count = 0;
 
+  task_control[D4_TASK].period = 1500;    // D4 every 1500ms
+  task_control[D4_TASK].suspended = 0;
+  task_control[D4_TASK].task_func = D4_Task;
+  task_control[D4_TASK].last_run = 0;
+  task_control[D4_TASK].run_count = 0;
 
-  // Clear the lights
-  HAL_GPIO_WritePin(LED_D1_GPIO_Port, LED_D1_Pin,GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LED_D2_GPIO_Port, LED_D2_Pin,GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LED_D3_GPIO_Port, LED_D3_Pin,GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LED_D4_GPIO_Port, LED_D4_Pin,GPIO_PIN_SET);
+  task_control[UART_TASK].period = 2000;  // UART every 2000ms
+  task_control[UART_TASK].suspended = 0;
+  task_control[UART_TASK].task_func = UART_Task;
+  task_control[UART_TASK].last_run = 0;
+  task_control[UART_TASK].run_count = 0;
 
-	//MultiFunctionShield_Display(10000);  // Out of range  will display "----"
+  task_control[IDLE_TASK].period = 100;   // Idle runs every 100ms
+  task_control[IDLE_TASK].suspended = 0;
+  task_control[IDLE_TASK].task_func = Idle_Task;
+  task_control[IDLE_TASK].last_run = 0;
+  task_control[IDLE_TASK].run_count = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  printf("\033\143\n");  // clear the terminal before printing
-  printf("Starting Lab-03:  Write a scheduler\n\r\n\r");  // clear the terminal before printing
-  HAL_Delay(1000);
-
-	Scheduler_Init();
-	// Start task arguments are:
-	//      start offset in ms, period in ms, function callback
-	Scheduler_StartTask(700, D1_task);
-	Scheduler_StartTask(1500, D4_task);
-	//
-
-
-
-
   while (1)
   {
+    Scheduler_Dispatch(); // Run the scheduler
+    HAL_Delay(1);        // Small delay to allow SysTick to update
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	Scheduler_Dispatch();
   }
   /* USER CODE END 3 */
 }
@@ -230,99 +199,19 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief TIM1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM1_Init(void)
-{
-
-  /* USER CODE BEGIN TIM1_Init 0 */
-
-  /* USER CODE END TIM1_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM1_Init 1 */
-
-  /* USER CODE END TIM1_Init 1 */
-  htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 8000-1;
-  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 10000;
-  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM1_Init 2 */
-
-  /* USER CODE END TIM1_Init 2 */
-
-}
-
-/**
-  * @brief TIM17 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM17_Init(void)
-{
-
-  /* USER CODE BEGIN TIM17_Init 0 */
-
-  /* USER CODE END TIM17_Init 0 */
-
-  /* USER CODE BEGIN TIM17_Init 1 */
-
-  /* USER CODE END TIM17_Init 1 */
-  htim17.Instance = TIM17;
-  htim17.Init.Prescaler = 800-1;
-  htim17.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim17.Init.Period = 100;
-  htim17.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim17.Init.RepetitionCounter = 0;
-  htim17.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim17) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM17_Init 2 */
-
-  /* USER CODE END TIM17_Init 2 */
-
-}
-
-/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
   */
 static void MX_USART2_UART_Init(void)
 {
+  /* USER CODE BEGIN USART2_Init_0 */
 
-  /* USER CODE BEGIN USART2_Init 0 */
+  /* USER CODE END USART2_Init_0 */
 
-  /* USER CODE END USART2_Init 0 */
+  /* USER CODE BEGIN USART2_Init_1 */
 
-  /* USER CODE BEGIN USART2_Init 1 */
-
-  /* USER CODE END USART2_Init 1 */
+  /* USER CODE END USART2_Init_1 */
   huart2.Instance = USART2;
   huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
@@ -337,10 +226,9 @@ static void MX_USART2_UART_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART2_Init 2 */
-
-  /* USER CODE END USART2_Init 2 */
-
+  /* USER CODE BEGIN USART2_Init_2 */
+  HAL_UART_Receive_IT(&huart2, (uint8_t*)rx_buffer, 10); // Start UART receive
+  /* USER CODE END USART2_Init_2 */
 }
 
 /**
@@ -351,8 +239,8 @@ static void MX_USART2_UART_Init(void)
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-/* USER CODE BEGIN MX_GPIO_Init_1 */
-/* USER CODE END MX_GPIO_Init_1 */
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+  /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
@@ -361,124 +249,147 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LED_D1_Pin|LED_D2_Pin|LED_D3_Pin|SevenSeg_CLK_Pin
-                          |SevenSeg_DATA_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, SevenSeg_LATCH_Pin|LED_D4_Pin, GPIO_PIN_RESET);
+  /*Configure GPIO pin Output Level for D4 (PB3 assumed) */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : B1_Pin */
+  /*Configure GPIO pin : B1_Pin (S1 on PC13) */
   GPIO_InitStruct.Pin = B1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LM35_IN_Pin */
-  GPIO_InitStruct.Pin = LM35_IN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG_ADC_CONTROL;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(LM35_IN_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PA0 */
+  /*Configure GPIO pin : PA0 (S2 assumed) */
   GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG_ADC_CONTROL;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : Button_1_Pin Button_2_Pin */
-  GPIO_InitStruct.Pin = Button_1_Pin|Button_2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LED_D1_Pin LED_D2_Pin LED_D3_Pin SevenSeg_CLK_Pin
-                           SevenSeg_DATA_Pin */
-  GPIO_InitStruct.Pin = LED_D1_Pin|LED_D2_Pin|LED_D3_Pin|SevenSeg_CLK_Pin
-                          |SevenSeg_DATA_Pin;
+  /*Configure GPIO pin : LD2_Pin (D1 on PA5) */
+  GPIO_InitStruct.Pin = LD2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Button_3_Pin */
-  GPIO_InitStruct.Pin = Button_3_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(Button_3_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : SevenSeg_LATCH_Pin LED_D4_Pin */
-  GPIO_InitStruct.Pin = SevenSeg_LATCH_Pin|LED_D4_Pin;
+  /*Configure GPIO pin : PB3 (D4 assumed) */
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
-
-/* USER CODE BEGIN MX_GPIO_Init_2 */
-/* USER CODE END MX_GPIO_Init_2 */
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14; // S3 on PC14
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART2) {
+        char task_id;
+        uint32_t period;
+        if (sscanf(rx_buffer, "%c %lu", &task_id, &period) == 2) {
+            if (task_id == 'T' && period >= 500 && period <= 3000) {
+                if (rx_buffer[1] == '1') task_control[D1_TASK].period = period;
+                else if (rx_buffer[1] == '4') task_control[D4_TASK].period = period;
+                else if (rx_buffer[1] == 'U') task_control[UART_TASK].period = period;
+            }
+        }
+        HAL_UART_Receive_IT(&huart2, (uint8_t*)rx_buffer, 10);
+    }
+}
 
+void D1_Task(void) {
+    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin); // Toggle D1 (LD2)
+}
 
-/**
-  * @brief  Retargets the C library printf function to the USART.
-  * @param  None
-  * @retval None
-  */
-PUTCHAR_PROTOTYPE
+void D4_Task(void) {
+    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_3); // Toggle D4 (PB3)
+}
+
+void UART_Task(void) {
+    if (!both_suspended) {
+        char msg[50];
+        sprintf(msg, "uwTick: %lu\r\n", uwTick);
+        HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 1000);
+    }
+}
+
+void Idle_Task(void) {
+    if (!both_suspended) {
+        left_display = (left_display + 1) % 10; // 0-9
+        right_display = (right_display + 1) % 6; // 0-5
+        char msg[50];
+        sprintf(msg, "Idle - Display: %d%d, uwTick: %lu\r\n", left_display, right_display, uwTick);
+        HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 1000);
+    }
+}
+
+void Scheduler_Dispatch(void)
 {
-  /* Place your implementation of fputc here */
-  /* e.g. write a character to the USART1 and Loop until the end of transmission */
-  HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, 0xFFFF);
+    task_cb task = NULL;
+    int task_found = 0;
 
-  return ch;
+    for (int i = 0; i < TASK_COUNT - 1; i++) { // Skip idle task
+        uint32_t elapsed = uwTick - task_control[i].last_run;
+        if (elapsed >= task_control[i].period && task_control[i].suspended == 0) {
+            task = task_control[i].task_func;
+            task_control[i].last_run = uwTick;
+            task_control[i].run_count++;
+            if (i == UART_TASK && task_control[i].run_count >= 10) {
+                task_control[i].suspended = 1; // Suspend UART after 10 runs
+            }
+            task_found = 1;
+            break;
+        }
+    }
+
+    if (!task_found) {
+        uint32_t elapsed = uwTick - task_control[IDLE_TASK].last_run;
+        if (elapsed >= task_control[IDLE_TASK].period) {
+            task = task_control[IDLE_TASK].task_func;
+            task_control[IDLE_TASK].last_run = uwTick;
+        }
+    }
+
+    if (task != NULL) {
+        task(); // Execute the task
+    }
 }
 
-
-
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-	{
-	// All three buttons generate GPIO  interrupts
-  /************** STUDENT EDITABLE HERE STARTS HERE *****/
-	switch(GPIO_Pin)
-	{
-	case Button_1_Pin:
-		// Toggle the suspend on task D1
-		break;
-	case Button_2_Pin:
-		break;
-	case Button_3_Pin:
-		break;
-	default:
-      __NOP();
-	}
-  /************** STUDENT EDITABLE HERE ENDS HERE *****/
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == B1_Pin) { // S1 (PC13)
+        task_control[D1_TASK].suspended = !task_control[D1_TASK].suspended;
+        if (!both_suspended) {
+            char msg[50];
+            sprintf(msg, "D1 %s\r\n", task_control[D1_TASK].suspended ? "suspended" : "resumed");
+            HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 1000);
+        }
+    }
+    else if (GPIO_Pin == GPIO_PIN_0) { // S2 (PA0)
+        task_control[D4_TASK].suspended = !task_control[D4_TASK].suspended;
+        if (!both_suspended) {
+            char msg[50];
+            sprintf(msg, "D4 %s\r\n", task_control[D4_TASK].suspended ? "suspended" : "resumed");
+            HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 1000);
+        }
+    }
+    else if (GPIO_Pin == GPIO_PIN_14) { // S3 (PC14)
+        task_control[D1_TASK].period += 300;
+        if (task_control[D1_TASK].period > 3000)
+            task_control[D1_TASK].period = 500;
+    }
+    if (task_control[D1_TASK].suspended && task_control[D4_TASK].suspended) {
+        both_suspended = 1;
+    } else {
+        both_suspended = 0;
+    }
 }
-
-// Callback: timer has rolled over
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-	{
-	// Check which version of the timer triggered this callback and toggle LED
-
-  if (htim == &htim17 )
-	  {
-		  MultiFunctionShield__ISRFunc();
-	  }
-
-	}
-
-
-
 /* USER CODE END 4 */
 
 /**
@@ -488,7 +399,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
